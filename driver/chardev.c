@@ -1,137 +1,126 @@
+#include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/fs.h>
 
 #include "chardev.h"
-#define OK 0
-#define DEV_NAME "lab_dev"
 
-static unsigned long Pid = 0;
-static enum mode Mod = Vm;
-static int Dev_Open = 0;
+#define DEV_NAME "uglybastard"
 
-static int device_open(struct inode* inode, struct file* file) {
-	if(Dev_Open) {
-		return -EBUSY;
-	}
-	Dev_Open++;
-
-	try_module_get(THIS_MODULE);
-	return OK;
-
-}
-
-static int device_release(struct inode* inode, struct file* file) {
-	Dev_Open--;
-
-	module_put(THIS_MODULE);
-	return OK;
-}
+static void __user *VmAreaAddr = NULL;
+static int SockFd = -1;
+static enum mode Mode = Vm;
 
 static ssize_t device_read(
-	struct file* file,
-	char __user* buf,
+	struct file *file,
+	char __user *buf,
 	size_t len,
-	loff_t* off
-) {
+	loff_t *off)
+{
 	int bytes_read = 0;
-	struct task_struct* t = get_pid_task(find_get_pid(Pid), PIDTYPE_PID);
-	void* transmitted;
+	void *transmitted;
 	unsigned long trans_sz = 0;
-	switch(Mod) {
+
+	switch (Mode)
+	{
 	case Vm:
-		transmited = t->mm->mmap;
-		break;
-	case Sock:
-		long fds_count = t->count;
-		transmited =
+	{
+		if (VmAreaAddr == NULL)
+		{
+			return 0;
+		}
+
+		struct vm_area_struct *vma_tmp = find_vma(current->mm, VmAreaAddr);
+		if (vma_tmp == NULL)
+		{
+			return 0; // todo: err
+		}
+
+		if (vma_tmp->vm_start > VmAreaAddr)
+		{
+			return 0; // todo: err
+		}
+
+		struct vm_area_info vmi = {
+			.inode = vma_tmp->vm_file->f_inode->i_ino,
+			.vm_start = vma_tmp->vm_start,
+			.vm_end = vma_tmp->vm_end,
+			.vm_flags = vma_tmp->vm_flags,
+		};
 		break;
 	}
-	while(len) {
-		put_user();
-		len--;
-		bytes_read++;
+	case Sock:
+	{
+		if (SockFd == -1)
+		{
+			return 0; // todo: err
+		}
+
+		int err = 0;
+		struct socket *socket = sockfd_lookup(SockFd, &err);
+		if (err != 0 || socket == NULL)
+		{
+			return 0; // todo: err
+		}
+
+		break;
+	}
 	}
 
 	return bytes_read;
 }
 
-static ssize_t device_write(
-	struct file* file,
-	const char __user* buf,
-	size_t len,
-	loff_t* off
-) {
-	//TODO: remove/use
-	return 0;
-}
-
 int device_ioctl(
-	struct inode* inode,
-	struct file* file,
-	unsigned int ioctl_num
-	unsigned long ioctl_param
-) {
-	int i;
-	char* tmp;
-	char ch;
-
-	switch (ioctl_num) {
-	case IOCTL_SET_PID:
-		Pid = ioctl_param;
+	struct file *file,
+	unsigned int ioctl_num,
+	unsigned long ioctl_param)
+{
+	switch (ioctl_num)
+	{
+	case IOCTL_SET_PARAM:
+	{
+		if (Mode == Vm)
+		{
+			VmAreaAddr = ioctl_param;
+			SockFd = -1;
+		}
+		else if (Mode == Sock)
+		{
+			VmAreaAddr = NULL;
+			SockFd = (int)ioctl_param;
+		}
 		break;
-	case IOCTL_GET_PID:
-		unsigned long * dest = (unsigned long *) ioctl_param;
-		put_user(Pid, dest);
-		break;
+	}
 	case IOCTL_SET_MODE:
-		Mod = (enum mode) ioctl_param;
+		Mode = (enum mode)ioctl_param;
 		break;
 	}
 
-	return OK;
+	return 0;
 }
 
 struct file_operations Fops = {
 	.read = device_read,
-	.write = device_write,
-	.ioctl = device_ioctl,
-	.open = device_open,
-	.release = device_release,
+	.unlocked_ioctl = device_ioctl,
 };
 
-int init_module() {
+int init_module()
+{
 	int res;
 
 	res = register_chrdev(MAJOR_NUM, DEV_NAME, &Fops);
 
-	if (res < 0) {
-		printk(KERN_ALERT "%s failed with %d\n",
-			"Device registration", res);
+	if (res < 0)
+	{
+		pr_alert("Device registration failed with %d\n",
+				 res);
 		return res;
 	}
 
-	return OK;
+	return 0;
 }
 
-void cleanup_module() {
-	int res;
-
-	res = unregister_chrdev(MAJOR_NUM, DEV_NAME);
-
-	if (res < 0) {
-		printk(KERN_ALERT "Error: unregister_chrdev: %d\n", ret);
-	}
+void cleanup_module()
+{
+	unregister_chrdev(MAJOR_NUM, DEV_NAME);
 }
-
-//pid_task(find_vpid(pid), PIDTYPE_PID);
-//get_pid_task(find_get_pid(pid_no), PIDTPYE_PID);
-//files -> fd_array 
-//struct stat statbuf;
-//fstat(fd, &statbuf);
-//S_ISSOCK(statbuf.st_mode);
-//sock_from_file
-//
-//get_task_mm
-
-
